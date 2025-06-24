@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>下駄積み上げゲーム</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #000;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      font-family: sans-serif;
+    }
+    #container {
+      position: relative;
+      width: 100%;
+      max-width: 320px;
+      height: 500px;
+      border: 5px solid #fff;
+      overflow: hidden;
+      background: none;
+    }
+    #background {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%;
+      height: 100%;
+      background: url('background.jpg') center/cover no-repeat;
+      z-index: 0;
+    }
+    #blocksLayer {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%;
+      height: 10000px;
+      z-index: 1;
+      transition: transform 0.3s ease-out;
+    }
+    #titleScreen, #gameOverScreen {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.7);
+      color: white;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 10;
+      padding: 1rem;
+      text-align: center;
+    }
+    #titleScreen h1 {
+      font-size: 5vw;
+      margin-bottom: 20px;
+    }
+    #titleScreen button, #gameOverScreen button {
+      padding: 10px 20px;
+      font-size: 4vw;
+      cursor: pointer;
+      margin: 8px;
+    }
+    .block {
+      position: absolute;
+      height: 20px;
+      background: url('block.png') center center no-repeat;
+      background-size: contain;
+      left: 0;
+      will-change: transform;
+    }
+    #ranking {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: white;
+      background: rgba(0,0,0,0.6);
+      padding: 8px;
+      font-size: 3vw;
+      z-index: 5;
+      user-select: none;
+    }
+    #timer {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      color: white;
+      background: rgba(0,0,0,0.6);
+      padding: 8px;
+      font-size: 4vw;
+      z-index: 5;
+      user-select: none;
+    }
+    #gameOverScreen h2 {
+      margin-bottom: 10px;
+      font-size: 5vw;
+    }
+  </style>
+</head>
+<body>
+  <div id="container">
+    <div id="background"></div>
+    <div id="blocksLayer"></div>
+
+    <div id="titleScreen">
+      <h1>下駄積み上げゲーム</h1>
+      <button onclick="startGame()">ゲームスタート</button>
+    </div>
+
+    <div id="ranking"></div>
+    <div id="timer">01:00</div>
+
+    <div id="gameOverScreen" style="display:none;">
+      <h2 id="resultText">Game Over</h2>
+      <button onclick="startGame()">もう一度</button>
+      <button onclick="returnToTitle()">タイトルに戻る</button>
+    </div>
+  </div>
+<script>
+  const container = document.getElementById('container');
+  const blocksLayer = document.getElementById('blocksLayer');
+  const titleScreen = document.getElementById('titleScreen');
+  const gameOverScreen = document.getElementById('gameOverScreen');
+  const resultText = document.getElementById('resultText');
+  const ranking = document.getElementById('ranking');
+  const timerEl = document.getElementById('timer');
+
+  let blocks = [];
+  let currentBlock = null;
+  let isGameOver = false;
+  let score = 0;
+  let width = 200;
+  let fallSpeed = 4;
+  const BLOCK_HEIGHT = 20;
+  const SCREEN_HEIGHT = 500;
+
+  let isFalling = false;
+  let isWobbling = false;
+  let wobbleStartTime = 0;
+  const WOBBLE_DURATION = 2000;
+
+  let timeLeft = 60000; // 1分(ミリ秒)
+  let timerInterval = null;
+
+  let baseHeight = 480; // 最初の積み上げブロックのtop座標（絶対座標系）
+  let lastTop = baseHeight;  // 最新積み上げブロックのtop座標（絶対座標系）
+
+  // 積み上げ限界高さ（段数）を最大100段に設定
+  let maxStackLimit = 100;
+
+  // 落とすブロックのベースtop位置（画面内の初期値）
+  let DROP_START_TOP_BASE = 80;
+
+  // cameraOffsetY: blocksLayerがtranslateYしている量(px)
+  let cameraOffsetY = 0;
+
+  // ブロック左右自動スライド用
+  let slideDirection = 1; // 1=右, -1=左
+  let slideSpeed = 3; // px/frame
+  const SLIDE_MIN_X = 0;
+  let SLIDE_MAX_X; // = 300 - width, 初期化時にセット
+
+  // DROP_START_TOPを計算（段数とカメラ位置に応じて調整）
+  function getDropStartTop() {
+    const extraOffset = Math.floor(score / 10) * BLOCK_HEIGHT;
+    return DROP_START_TOP_BASE - extraOffset - cameraOffsetY;
+  }
+
+  function createBlock(top, left, width) {
+    const block = document.createElement('div');
+    block.className = 'block';
+    block.style.top = top + 'px';
+    block.style.left = left + 'px';
+    block.style.width = width + 'px';
+    blocksLayer.appendChild(block);
+    return block;
+  }
+
+  function startGame() {
+    titleScreen.style.display = 'none';
+    gameOverScreen.style.display = 'none';
+    blocksLayer.innerHTML = '';
+    blocksLayer.style.transform = 'translateY(0px)';
+    blocks = [];
+    isGameOver = false;
+    score = 0;
+    width = 200;
+    lastTop = baseHeight;
+    maxStackLimit = 100; // 最大段数100に設定
+    isFalling = false;
+    isWobbling = false;
+    cameraOffsetY = 0;
+    currentBlock = null;
+    showRanking();
+
+    SLIDE_MAX_X = 300 - width;
+
+    // 最初の基準ブロック（積み上げスタート位置）
+    const base = createBlock(lastTop, 50, width);
+    blocks.push(base);
+
+    // 新しいブロックは画面内の見える位置に配置（getDropStartTopを使う）
+    currentBlock = {
+      el: createBlock(getDropStartTop(), (300 - width) / 2, width),
+      top: getDropStartTop(),
+      left: (300 - width) / 2
+    };
+    updateBlockPosition();
+
+    startSlide();
+    startTimer();
+  }
+  function returnToTitle() {
+  gameOverScreen.style.display = 'none';
+  titleScreen.style.display = 'flex';
+  }
+
+  function updateBlockPosition() {
+    currentBlock.el.style.top = currentBlock.top + 'px';
+    currentBlock.el.style.left = currentBlock.left + 'px';
+  }
+
+  function fall() {
+    if (isGameOver) return;
+    if (!isFalling) return;
+
+    currentBlock.top += fallSpeed;
+    updateBlockPosition();
+
+    if (currentBlock.top + BLOCK_HEIGHT >= lastTop) {
+      stopSlide();
+      checkStack();
+      return;
+    }
+    requestAnimationFrame(fall);
+  }
+
+  function stopBlock() {
+    if (isGameOver) return;
+    if (!isFalling) return;
+
+    if (currentBlock.top + BLOCK_HEIGHT >= lastTop) {
+      stopSlide();
+      checkStack();
+    } else {
+      currentBlock.top = lastTop - BLOCK_HEIGHT;
+      updateBlockPosition();
+      stopSlide();
+      checkStack();
+    }
+  }
+
+  function startWobble() {
+    if (isWobbling) return;
+    isWobbling = true;
+    wobbleStartTime = performance.now();
+    wobbleAnimation();
+  }
+
+  function wobbleAnimation() {
+    if (!isWobbling) return;
+    const elapsed = performance.now() - wobbleStartTime;
+    if (elapsed > WOBBLE_DURATION) {
+      showGameOver();
+      return;
+    }
+    const amplitude = 10 * (1 - elapsed / WOBBLE_DURATION);
+    const wobbleX = amplitude * Math.sin(elapsed / 100);
+    currentBlock.el.style.transform = `translateX(${wobbleX}px)`;
+    requestAnimationFrame(wobbleAnimation);
+  }
+
+  function resetWobble() {
+    isWobbling = false;
+    if (currentBlock && currentBlock.el) {
+      currentBlock.el.style.transform = 'translateX(0)';
+    }
+  }
+
+  function checkStack() {
+    if (isWobbling) return;
+
+    const prev = blocks[blocks.length - 1];
+    const prevLeft = parseInt(prev.style.left);
+    const diff = currentBlock.left - prevLeft;
+
+    if (Math.abs(diff) >= width) {
+      showGameOver();
+      return;
+    }
+
+    const wobbleThreshold = width / 2;
+
+    if (Math.abs(diff) > wobbleThreshold) {
+      startWobble();
+    } else {
+      resetWobble();
+    }
+
+    const newWidth = width - Math.abs(diff);
+    const newLeft = diff > 0 ? currentBlock.left : prevLeft;
+
+    currentBlock.el.style.width = newWidth + 'px';
+    currentBlock.el.style.left = newLeft + 'px';
+
+    width = newWidth;
+    score++;
+
+    // 10段積むごとに積み上げ限界を1段ずつ増やすが最大100段まで
+    if (score > 0 && score % 10 === 0 && maxStackLimit < 100) {
+      maxStackLimit += 1;
+    }
+
+    updateCamera();
+
+    lastTop -= BLOCK_HEIGHT;
+
+    blocks.push(currentBlock.el);
+    isFalling = false;
+
+    // ↓ この判定を削除しました
+    // if (lastTop <= 0) {
+    //   showGameOver(`🎉 クリア！<br>スコア：${score}`);
+    //   return;
+    // }
+
+    if(score >= maxStackLimit) {
+      showGameOver(`🎉 最大${maxStackLimit}段積み上げクリア！<br>スコア：${score}`);
+      return;
+    }
+
+    currentBlock = {
+      el: createBlock(getDropStartTop(), (300 - width) / 2, width),
+      top: getDropStartTop(),
+      left: (300 - width) / 2
+    };
+    updateBlockPosition();
+
+    SLIDE_MAX_X = 300 - width;
+    slideDirection = 1; // 初期は右向き
+    startSlide();
+
+    showRanking();
+  }
+
+  // 左右スライド開始
+  let slideRequestId = null;
+  function startSlide() {
+    if (slideRequestId) cancelAnimationFrame(slideRequestId);
+    slideRequestId = requestAnimationFrame(slide);
+  }
+
+  // 左右スライド停止
+  function stopSlide() {
+    if (slideRequestId) {
+      cancelAnimationFrame(slideRequestId);
+      slideRequestId = null;
+    }
+  }
+
+  function slide() {
+    if (isGameOver || isFalling) {
+      slideRequestId = null;
+      return;
+    }
+    currentBlock.left += slideDirection * slideSpeed;
+    if (currentBlock.left <= SLIDE_MIN_X) {
+      currentBlock.left = SLIDE_MIN_X;
+      slideDirection = 1;
+    } else if (currentBlock.left >= SLIDE_MAX_X) {
+      currentBlock.left = SLIDE_MAX_X;
+      slideDirection = -1;
+    }
+    updateBlockPosition();
+    slideRequestId = requestAnimationFrame(slide);
+  }
+
+  function updateCamera() {
+    if(score < 9) {
+      cameraOffsetY = 0;
+    } else {
+      cameraOffsetY = (score - 9) * BLOCK_HEIGHT;
+    }
+    blocksLayer.style.transform = `translateY(${cameraOffsetY}px)`;
+  }
+
+  function showGameOver(message = 'Game Over') {
+    isGameOver = true;
+    if (timerInterval) clearInterval(timerInterval);
+    resultText.innerHTML = `${message}<br>スコア：${score}`;
+    saveScore(score);
+    gameOverScreen.style.display = 'flex';
+    stopSlide();
+  }
+
+  function saveScore(score) {
+    const scores = JSON.parse(localStorage.getItem('stack_wobble_scores') || '[]');
+    scores.push(score);
+    scores.sort((a,b) => b - a);
+    const top = scores.slice(0,3);
+    localStorage.setItem('stack_wobble_scores', JSON.stringify(top));
+  }
+
+  function showRanking() {
+    const scores = JSON.parse(localStorage.getItem('stack_wobble_scores') || '[]');
+    ranking.innerHTML = '<strong>🏆 ランキング</strong><br>' +
+      scores.map((s,i) => `${i+1}位：${s} 段`).join('<br>');
+  }
+
+  function startTimer() {
+    timeLeft = 60000; // 1分
+    updateTimerDisplay();
+
+    if (timerInterval) clearInterval(timerInterval);
+    timerInterval = setInterval(() => {
+      if (isGameOver) {
+        clearInterval(timerInterval);
+        return;
+      }
+      timeLeft -= 1000;
+      if (timeLeft <= 0) {
+        timeLeft = 0;
+        clearInterval(timerInterval);
+        showGameOver('時間切れ！');
+        return;
+      }
+      updateTimerDisplay();
+    }, 1000);
+  }
+
+  function updateTimerDisplay() {
+    const minutes = Math.floor(timeLeft / 60000);
+    const seconds = Math.floor((timeLeft % 60000) / 1000);
+    timerEl.textContent = `${minutes.toString().padStart(2,'0')}:${seconds.toString().padStart(2,'0')}`;
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (isGameOver) return;
+
+    if (!isFalling && !isWobbling) {
+      if (e.code === 'Space') {
+        isFalling = true;
+        stopSlide();
+        fall();
+      }
+    } else if (isFalling) {
+      if (e.code === 'Space') stopBlock();
+    }
+  });
+
+  document.addEventListener('click', () => {
+    if (isGameOver) return;
+
+    if (!isFalling && !isWobbling) {
+      isFalling = true;
+      stopSlide();
+      fall();
+    } else if (isFalling) {
+      stopBlock();
+    }
+  });
+</script>
+</body>
+</html>
